@@ -1,0 +1,36 @@
+{
+    "name": "After Work",
+    "short_name": "After Work",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#0A38A8",
+    "theme_color": "#0A38A8",
+    "description": "Coffee by day. Dining by evening. Moments all night.",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "icons/after-work-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/after-work-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/after-work-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/after-work-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}
+
