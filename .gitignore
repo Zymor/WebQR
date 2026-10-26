@@ -57,3 +57,7 @@ app.*.map.json
 node_modules/
 .local-postgres/
 *.backup.json
+
+# Provider CLI-installed agent metadata
+.agents/
+skills-lock.json
