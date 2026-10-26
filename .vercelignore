@@ -15,3 +15,7 @@ macos
 windows
 build
 qr-codes
+
+node_modules
+.local-postgres
+*.backup.json

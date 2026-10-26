@@ -6,3 +6,5 @@ String readRoute() => '';
 void writeRoute(String route) {}
 Stream<String> get routeChanges => const Stream.empty();
 bool downloadBytes(Uint8List bytes, String filename) => false;
+
+bool openWebsite(String url) => false;

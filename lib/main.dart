@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'service_pages.dart';
 import 'explore_pages.dart';
 import 'tables_page.dart';
+import 'order_checkout.dart';
+import 'staff_portal.dart';
 
 import 'dart:convert';
 import 'dart:async';
@@ -163,6 +165,7 @@ class _SocialHouseState extends State<SocialHouse> {
   StreamSubscription<String>? routeSubscription;
   final Set<String> favorites = {};
   final Map<String, int> cart = {};
+  final Map<String, String> itemNotes = {};
   final ScrollController scroll = ScrollController();
   int get cartCount => cart.values.fold(0, (a, b) => a + b);
   double get subtotal => cart.entries.fold(
@@ -189,6 +192,10 @@ class _SocialHouseState extends State<SocialHouse> {
         final stored = jsonDecode(savedTable);
         tableId = stored['id'];
         tableName = stored['name'];
+      }
+      final rawNotes = readLocal('afterwork.item_notes');
+      if (rawNotes != null) {
+        itemNotes.addAll(Map<String, String>.from(jsonDecode(rawNotes)));
       }
       final savedCart = readLocal('social.cart');
       if (savedCart != null) {
@@ -292,12 +299,27 @@ class _SocialHouseState extends State<SocialHouse> {
     }
   }
 
+  Map<String, dynamic> orderPayload() => {
+    'table_id': tableId,
+    'items': cart.entries
+        .map(
+          (e) => {
+            'id': e.key,
+            'quantity': e.value,
+            'unit_price': (dishes.firstWhere((d) => d.id == e.key).price * 100)
+                .round(),
+            'notes': itemNotes[e.key] ?? '',
+          },
+        )
+        .toList(),
+  };
   void saveLocal() {
     writeLocal(
       'social.table',
       tableId == null ? '' : jsonEncode({'id': tableId, 'name': tableName}),
     );
     writeLocal('social.cart', jsonEncode(cart));
+    writeLocal('afterwork.item_notes', jsonEncode(itemNotes));
     writeLocal('social.favorites', jsonEncode(favorites.toList()));
   }
 
@@ -420,10 +442,16 @@ class _SocialHouseState extends State<SocialHouse> {
                             'Tables' => const TablesPage(),
                             'Menu' || 'Favorites' => menu(mobile),
                             'Cart' => cartPage(mobile),
-                            'Reservations' ||
-                            'Account' ||
-                            'Checkout' ||
-                            'Admin' => ServicePage(
+                            'Admin' => const StaffPortal(),
+                            'Checkout' || 'Account' => OrderCheckout(
+                              key: const ValueKey('checkout'),
+                              order: orderPayload(),
+                              onOrdered: () {
+                                setState(() => cart.clear());
+                                saveLocal();
+                              },
+                            ),
+                            'Reservations' => ServicePage(
                               key: ValueKey(page),
                               page: page,
                               onMenuChanged: refreshMenu,
@@ -884,7 +912,7 @@ class _SocialHouseState extends State<SocialHouse> {
       ),
       const SizedBox(height: 14),
       const Text(
-        'Demonstration menu • orders are saved locally • no payments',
+        'Made fresh • Order for your table • Pay at the counter',
         style: TextStyle(fontSize: 10, color: muted),
       ),
       const SizedBox(height: 23),
@@ -1413,6 +1441,20 @@ class _SocialHouseState extends State<SocialHouse> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(d.name),
+                        TextFormField(
+                          key: ValueKey('note-${d.id}'),
+                          initialValue: itemNotes[d.id] ?? '',
+                          maxLength: 300,
+                          decoration: const InputDecoration(
+                            hintText: 'Item notes (optional)',
+                            counterText: '',
+                          ),
+                          style: const TextStyle(fontSize: 11),
+                          onChanged: (v) {
+                            itemNotes[d.id] = v;
+                            saveLocal();
+                          },
+                        ),
                         Text(
                           '\$${d.price.toStringAsFixed(2)} each',
                           style: const TextStyle(color: muted, fontSize: 12),
@@ -1446,16 +1488,13 @@ class _SocialHouseState extends State<SocialHouse> {
           const Divider(),
           infoRow('Subtotal', '\$${subtotal.toStringAsFixed(2)} USD'),
           const SizedBox(height: 20),
-          const TextField(
-            maxLines: 2,
-            decoration: InputDecoration(
-              labelText: 'Order notes',
-              hintText: 'Anything we should know?',
-            ),
+          const Text(
+            'Add special requests on the order review screen.',
+            style: TextStyle(fontSize: 12, color: muted),
           ),
           const SizedBox(height: 25),
           const Text(
-            'Demonstration pickup orders are saved to the local server. No payment is taken and no real kitchen is notified.',
+            'Orders are sent to the kitchen after you review your table and total. Pay at the counter.',
             style: TextStyle(color: muted),
           ),
           const SizedBox(height: 20),

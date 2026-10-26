@@ -44,3 +44,12 @@ bool downloadBytes(Uint8List bytes, String filename) {
   Timer(const Duration(seconds: 5), () => web.URL.revokeObjectURL(url));
   return true;
 }
+
+bool openWebsite(String url) {
+  final anchor = web.HTMLAnchorElement()
+    ..href = url
+    ..target = '_blank'
+    ..rel = 'noopener noreferrer';
+  anchor.click();
+  return true;
+}

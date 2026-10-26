@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 class Api {
+  static http.Client client = http.Client();
   static const base = String.fromEnvironment(
     'SOCIAL_API',
     defaultValue: 'http://127.0.0.1:8787/api',
@@ -14,26 +15,30 @@ class Api {
     String path, {
     String method = 'GET',
     Map<String, dynamic>? data,
+    String? orderToken,
   }) async {
     try {
       final req = http.Request(method, Uri.parse('$base$path'));
       req.headers['Content-Type'] = 'application/json';
+      if (orderToken != null) req.headers['X-Order-Token'] = orderToken;
       if (token != null) req.headers['Authorization'] = 'Bearer $token';
       if (data != null) req.body = jsonEncode(data);
       final response = await http.Response.fromStream(
-        await req.send().timeout(const Duration(seconds: 12)),
+        await client.send(req).timeout(const Duration(seconds: 12)),
       );
-      if (response.statusCode == 404 || response.statusCode == 503) {
-        throw Exception('The online booking and ordering service is not configured for this deployment. No record has been submitted.');
+      dynamic decoded;
+      try {
+        decoded = jsonDecode(response.body);
+      } catch (_) {
+        throw Exception('The online service is unavailable. Please retry.');
       }
-      final decoded = jsonDecode(response.body);
       if (response.statusCode >= 400) {
         throw Exception(decoded['error'] ?? 'Request failed.');
       }
       return decoded;
     } on http.ClientException {
       throw Exception(
-        'Cannot reach the local service. Start server/app.py and retry.',
+        'Cannot reach the ordering service. Check your connection and retry.',
       );
     }
   }

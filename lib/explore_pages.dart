@@ -290,7 +290,7 @@ class _ExplorePageState extends State<ExplorePage> {
         ),
         const SizedBox(height: 25),
         const Text(
-          'Demonstration opening hours · Asia/Phnom_Penh',
+          'Opening hours · Asia/Phnom_Penh',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         ...(settings!['hours'] as Map).entries.map(
