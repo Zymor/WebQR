@@ -23,6 +23,9 @@ class Api {
       final response = await http.Response.fromStream(
         await req.send().timeout(const Duration(seconds: 12)),
       );
+      if (response.statusCode == 404 || response.statusCode == 503) {
+        throw Exception('The online booking and ordering service is not configured for this deployment. No record has been submitted.');
+      }
       final decoded = jsonDecode(response.body);
       if (response.statusCode >= 400) {
         throw Exception(decoded['error'] ?? 'Request failed.');

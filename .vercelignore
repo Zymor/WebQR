@@ -1,0 +1,17 @@
+.git
+.dart_tool
+.idea
+.vscode
+.vercel
+.env*
+**/*.sqlite3*
+**/__pycache__/**
+**/*.pyc
+**/*.log
+android
+ios
+linux
+macos
+windows
+build
+qr-codes

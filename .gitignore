@@ -46,3 +46,10 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+.vercel
+.env*
+
+# Hosting metadata and environment secrets
+.vercel/
+.env*
+!.env.example
