@@ -18,6 +18,11 @@ export function httpHandler(db,options={}){
     res.setHeader('Access-Control-Allow-Origin',origin);res.setHeader('Vary','Origin');
    }
    if(req.method==='OPTIONS'){res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization, X-Order-Token');res.setHeader('Access-Control-Allow-Methods','GET,POST,PATCH,OPTIONS');res.statusCode=204;res.end();return;}
+   if(/^\/media\/[A-Za-z0-9-]+$/.test(path)&&req.method==='GET'){
+    const media=(await db.query('SELECT mime,data FROM aw_media WHERE id=$1',[path.split('/')[2]])).rows[0];
+    if(!media)throw new Problem('Photo not found.',404);
+    res.statusCode=200;res.setHeader('Content-Type',media.mime);res.setHeader('Vary','Origin');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Cache-Control','public, max-age=31536000, immutable');res.end(Buffer.from(media.data));return;
+   }
    if(path==='/staff/stream'&&req.method==='GET'){
     await app.route('GET','/staff/me',{}, {},context);
     res.statusCode=200;res.setHeader('Content-Type','text/event-stream');res.setHeader('Cache-Control','no-cache, no-transform');res.setHeader('X-Accel-Buffering','no');res.flushHeaders?.();
@@ -33,7 +38,9 @@ export function httpHandler(db,options={}){
     res.end();return;
    }
    let data=req.body;
-   if(data===undefined){let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>32768)throw new Problem('Request is too large.',413);}data=raw?JSON.parse(raw):{};}
+   const maxBody=path==='/staff/media'?2900000:32768;
+   if(data===undefined){let raw='';for await(const chunk of req){raw+=chunk;if(Buffer.byteLength(raw)>maxBody)throw new Problem('Request is too large.',413);}data=raw?JSON.parse(raw):{};}
+   if(Buffer.byteLength(typeof data==='string'?data:JSON.stringify(data??{}))>maxBody)throw new Problem('Request is too large.',413);
    if(typeof data==='string')data=JSON.parse(data);
    if(!data||typeof data!=='object'||Array.isArray(data))throw new Problem('Expected a JSON object.');
    json(await app.route(req.method,path,data,Object.fromEntries(url.searchParams),context));

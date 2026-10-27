@@ -73,7 +73,10 @@ class _OrderCheckoutState extends State<OrderCheckout> {
   }
 
   Future<void> loadQuote() async {
-    setState(() => busy = true);
+    setState(() {
+      busy = true;
+      quote = null;
+    });
     try {
       final v = await Api.request(
         '/orders/quote',
@@ -153,6 +156,7 @@ class _OrderCheckoutState extends State<OrderCheckout> {
               },
             )
             .toList(),
+        'expected_total': quote!['total'],
         'name': name.text,
         'notes': notes.text,
       };
@@ -192,8 +196,19 @@ class _OrderCheckoutState extends State<OrderCheckout> {
       widget.onOrdered();
       startPolling();
     } catch (e) {
-      if (mounted) {
-        setState(() => message = e.toString().replaceFirst('Exception: ', ''));
+      final error = e.toString().replaceFirst('Exception: ', '');
+      if (error.contains('price changed') ||
+          error.contains('total changed') ||
+          error.contains('no longer available')) {
+        await loadQuote();
+        if (mounted) {
+          setState(
+            () => message =
+                '$error Review the summary and press Place order again to confirm.',
+          );
+        }
+      } else if (mounted) {
+        setState(() => message = error);
       }
     } finally {
       if (mounted) setState(() => busy = false);

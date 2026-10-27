@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS aw_order_history(id bigserial PRIMARY KEY,order_id te
 CREATE TABLE IF NOT EXISTS aw_idempotency(key text PRIMARY KEY,fingerprint text NOT NULL,order_id text NOT NULL REFERENCES aw_orders(id));
 CREATE TABLE IF NOT EXISTS aw_audit(id bigserial PRIMARY KEY,actor_id text REFERENCES aw_staff(id),action text NOT NULL,record_id text NOT NULL,details jsonb NOT NULL DEFAULT '{}',created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS aw_rate_limits(key text PRIMARY KEY,hits integer NOT NULL,window_start timestamptz NOT NULL);
+ALTER TABLE aw_menu ADD COLUMN IF NOT EXISTS ingredients text NOT NULL DEFAULT '';
+ALTER TABLE aw_menu ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS aw_media(id text PRIMARY KEY,mime text NOT NULL,data bytea NOT NULL,created_at timestamptz NOT NULL DEFAULT now());
 INSERT INTO aw_settings(id) VALUES(1) ON CONFLICT DO NOTHING;
 `;
 const menu=[

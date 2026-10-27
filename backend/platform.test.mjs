@@ -6,7 +6,7 @@ import {initialize} from './schema.mjs';import {createPlatform} from './platform
 let pg,db,app,owner,staff,folder;
 const setup='local-integration-test-owner-key-12345';
 const ctx=(token)=>({token,ip:secret()});
-const body=(extra={})=>({table_id:'T03',items:[{id:'chicken',quantity:2,unit_price:1800,notes:'No spicy seasoning'},{id:'coffee',quantity:1,unit_price:450,notes:'No sugar'}],request_key:secret(),access_token:secret(),notes:'Bring water please',name:'Guest',...extra});
+const body=(extra={})=>({table_id:'T03',expected_total:4050,items:[{id:'chicken',quantity:2,unit_price:1800,notes:'No spicy seasoning'},{id:'coffee',quantity:1,unit_price:450,notes:'No sugar'}],request_key:secret(),access_token:secret(),notes:'Bring water please',name:'Guest',...extra});
 before(async()=>{
  folder=await mkdtemp(join(tmpdir(),'afterwork-pg-'));pg=new PGlite(folder);db={query:(...a)=>pg.query(...a),transaction:fn=>pg.transaction(fn)};await initialize(db);app=createPlatform(db,{setupHash:hash(setup)});
  await app.route('POST','/staff/setup',{setup_token:setup,name:'Owner',email:'owner@example.com',password:'a-long-owner-test-password'},{},ctx());
@@ -27,3 +27,50 @@ test('staff cannot change prices or create staff accounts',async()=>{await asser
 test('closing ordering rejects new orders but retains existing queue',async()=>{const before=(await app.route('GET','/staff/orders',{}, {},ctx(staff))).orders.length;await db.query('UPDATE aw_settings SET ordering_enabled=false');await assert.rejects(app.route('POST','/orders',body(),{},ctx()),{status:409});assert.equal((await app.route('GET','/staff/orders',{}, {},ctx(staff))).orders.length,before);await db.query('UPDATE aw_settings SET ordering_enabled=true');});
 test('SSE authenticates and sends the complete recoverable order snapshot',async()=>{const server=createServer(httpHandler(db,{streamMs:100,streamInterval:25}));await new Promise(r=>server.listen(0,'127.0.0.1',r));try{const response=await fetch(`http://127.0.0.1:${server.address().port}/api/staff/stream`,{headers:{Authorization:'Bearer '+staff}});assert.equal(response.status,200);assert.match(response.headers.get('content-type'),/text\/event-stream/);const data=await response.text();assert.match(data,/data:.*"table_id":"T03"/);assert.match(data,/"items":/);}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}});
 test('persisted orders survive reopening the database',async()=>{const saved=await app.route('POST','/orders',body(),{},ctx());await pg.close();pg=new PGlite(folder);await pg.waitReady;assert.equal((await db.query('SELECT table_id,payment_status FROM aw_orders WHERE id=$1',[saved.order.id])).rows[0].table_id,'T03');});
+
+test('dish creation, uploaded photo, edits, archive and restore preserve orders',async()=>{
+ const photo=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1cAAAAASUVORK5CYII=','base64');
+ const uploaded=await app.route('POST','/staff/media',{mime:'image/png',base64:photo.toString('base64')},{},ctx(owner));
+ const value={name:'New test dish',category_id:'mains',description:'Fresh test dish',ingredients:'Rice, vegetables',allergens:'Soy',price:1250,image:uploaded.image,vegetarian:true,available:true};
+ const added=await app.route('POST','/staff/menu',value,{},ctx(owner));
+ let menu=(await app.route('GET','/menu')).items;assert.equal(menu.find(m=>m.id===added.id).ingredients,value.ingredients);
+ const b=body({items:[{id:added.id,quantity:1,unit_price:1250}],expected_total:1250});
+ const saved=await app.route('POST','/orders',b,{},ctx());
+ await app.route('PATCH','/staff/menu',{...value,id:added.id,name:'Updated test dish',price:1500,available:false},{},ctx(owner));
+ menu=(await app.route('GET','/menu')).items;assert.equal(menu.find(m=>m.id===added.id).available,false);
+ await assert.rejects(app.route('POST','/orders',body({items:b.items}),{},ctx()),{status:409});
+ await app.route('PATCH',`/staff/menu/${added.id}/archive`,{archived:true},{},ctx(owner));
+ assert(!(await app.route('GET','/menu')).items.some(m=>m.id===added.id));
+ const old=(await app.route('GET','/orders/'+saved.order.id,{}, {},{orderToken:b.access_token})).order;
+ assert.equal(old.items[0].name,value.name);assert.equal(old.items[0].unit_price,1250);
+ await app.route('PATCH',`/staff/menu/${added.id}/archive`,{archived:false},{},ctx(owner));
+ assert((await app.route('GET','/menu')).items.some(m=>m.id===added.id));
+ const server=createServer(httpHandler(db));await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ try{const r=await fetch(`http://127.0.0.1:${server.address().port}`+uploaded.image);assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),'image/png');assert.deepEqual(Buffer.from(await r.arrayBuffer()),photo);}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+ await pg.close();pg=new PGlite(folder);await pg.waitReady;assert.equal((await db.query('SELECT count(*)::int n FROM aw_media WHERE id=$1',[uploaded.image.slice(11)])).rows[0].n,1);
+});
+test('media and menu writes enforce roles and validate photo contents',async()=>{
+ await assert.rejects(app.route('POST','/staff/media',{}, {},ctx()),{status:401});
+ await assert.rejects(app.route('POST','/staff/media',{}, {},ctx(staff)),{status:403});
+ await assert.rejects(app.route('POST','/staff/menu',{}, {},ctx(staff)),{status:403});
+ await assert.rejects(app.route('PATCH','/staff/menu/coffee/archive',{archived:true}, {},ctx(staff)),{status:403});
+ for(const mime of ['image/svg+xml','image/png'])await assert.rejects(app.route('POST','/staff/media',{mime,base64:Buffer.from('not an image').toString('base64')},{},ctx(owner)),{status:400});
+ await assert.rejects(app.route('POST','/staff/media',{mime:'image/png',base64:Buffer.alloc(2097153).toString('base64')},{},ctx(owner)),{status:413});
+});
+test('a tax or price change requires a new reviewed quote before saving',async()=>{
+ const b=body();await db.query('UPDATE aw_settings SET tax_basis_points=1000');
+ await assert.rejects(app.route('POST','/orders',b,{},ctx()),{status:409});
+ assert.equal((await db.query('SELECT count(*)::int n FROM aw_idempotency WHERE key=$1',[b.request_key])).rows[0].n,0);
+ const q=await app.route('POST','/orders/quote',b);b.expected_total=q.total;
+ const saved=await app.route('POST','/orders',b,{},ctx());assert.equal(saved.order.total,q.total);
+ const replay=await app.route('POST','/orders',b,{},ctx());assert.equal(replay.order.id,saved.order.id);
+ await db.query('UPDATE aw_settings SET tax_basis_points=0');
+ const changed=body();await db.query("UPDATE aw_menu SET price=500 WHERE id='coffee'");
+ await assert.rejects(app.route('POST','/orders',changed,{},ctx()),{status:409});
+ await db.query("UPDATE aw_menu SET price=450 WHERE id='coffee'");
+});
+test('same admin credentials create independent sessions for both websites',async()=>{
+ const credentials={email:'owner@example.com',password:'a-long-owner-test-password'};
+ const a=await app.route('POST','/staff/auth/login',credentials,{},ctx());const b=await app.route('POST','/staff/auth/login',credentials,{},ctx());assert.notEqual(a.token,b.token);
+ await app.route('POST','/staff/auth/logout',{}, {},ctx(a.token));assert.equal(await app.session(a.token),null);assert.equal((await app.session(b.token)).role,'owner');
+});

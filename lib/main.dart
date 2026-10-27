@@ -21,7 +21,8 @@ void main() => runApp(const MyApp());
 class Dish {
   final String id, name, category, experience, image, description, allergens;
   final double price;
-  final bool vegetarian;
+  final bool vegetarian, available;
+  final String ingredients;
   const Dish(
     this.id,
     this.name,
@@ -32,6 +33,8 @@ class Dish {
     this.description,
     this.allergens, {
     this.vegetarian = false,
+    this.available = true,
+    this.ingredients = '',
   });
 }
 
@@ -160,6 +163,8 @@ class _SocialHouseState extends State<SocialHouse> {
   String page = 'Details', category = 'All', search = '', experience = 'All';
   Dish selected = dishes.first;
   int quantity = 1;
+  final Map<String, int> cardQuantities = {};
+  Timer? menuPoll;
   bool vegetarian = false;
   double maxPrice = 60;
   StreamSubscription<String>? routeSubscription;
@@ -209,6 +214,10 @@ class _SocialHouseState extends State<SocialHouse> {
       /* Ignore invalid browser-local data. */
     }
     refreshMenu();
+    menuPoll = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => refreshMenu(),
+    );
   }
 
   Future<void> refreshMenu() async {
@@ -226,6 +235,8 @@ class _SocialHouseState extends State<SocialHouse> {
               d['description'],
               d['allergens'],
               vegetarian: d['vegetarian'] == 1,
+              available: d['available'] == true,
+              ingredients: d['ingredients'] ?? '',
             ),
           )
           .toList();
@@ -236,6 +247,8 @@ class _SocialHouseState extends State<SocialHouse> {
           cart.removeWhere((id, _) => !items.any((d) => d.id == id));
           if (items.any((d) => d.id == selected.id)) {
             selected = items.firstWhere((d) => d.id == selected.id);
+          } else if (page == 'Details') {
+            page = 'Menu';
           }
         });
       }
@@ -325,18 +338,6 @@ class _SocialHouseState extends State<SocialHouse> {
 
   Future<void> toggleFavorite(String id) async {
     final saved = !favorites.contains(id);
-    if (Api.token != null) {
-      try {
-        await Api.request(
-          '/favorites',
-          method: 'POST',
-          data: {'id': id, 'saved': saved},
-        );
-      } catch (e) {
-        notify(e.toString());
-        return;
-      }
-    }
     setState(() {
       if (saved) {
         favorites.add(id);
@@ -354,18 +355,6 @@ class _SocialHouseState extends State<SocialHouse> {
     });
     saveLocal();
     writeRoute(value == 'Details' ? 'Details:${selected.id}' : value);
-    if (Api.token != null && value == 'Favorites') {
-      Api.request('/me')
-          .then((v) {
-            if (mounted) {
-              setState(() {
-                favorites.clear();
-                favorites.addAll(List<String>.from(v['favorites']));
-              });
-            }
-          })
-          .catchError((Object _) {});
-    }
     if (scroll.hasClients) scroll.jumpTo(0);
   }
 
@@ -385,6 +374,14 @@ class _SocialHouseState extends State<SocialHouse> {
     ),
   );
   void add() {
+    if (!selected.available) {
+      notify('This dish is sold out.');
+      return;
+    }
+    if ((cart[selected.id] ?? 0) + quantity > 20) {
+      notify('Maximum 20 of each dish per order.');
+      return;
+    }
     setState(
       () => cart.update(
         selected.id,
@@ -398,6 +395,7 @@ class _SocialHouseState extends State<SocialHouse> {
 
   @override
   void dispose() {
+    menuPoll?.cancel();
     routeSubscription?.cancel();
     scroll.dispose();
     super.dispose();
@@ -442,8 +440,11 @@ class _SocialHouseState extends State<SocialHouse> {
                             'Tables' => const TablesPage(),
                             'Menu' || 'Favorites' => menu(mobile),
                             'Cart' => cartPage(mobile),
-                            'Admin' => const StaffPortal(),
-                            'Checkout' || 'Account' => OrderCheckout(
+                            'Admin' => StaffPortal(onMenuChanged: refreshMenu),
+                            'Account' => StaffPortal(
+                              onMenuChanged: refreshMenu,
+                            ),
+                            'Checkout' => OrderCheckout(
                               key: const ValueKey('checkout'),
                               order: orderPayload(),
                               onOrdered: () {
@@ -609,8 +610,14 @@ class _SocialHouseState extends State<SocialHouse> {
     BoxFit fit = BoxFit.cover,
   }) => ClipRRect(
     borderRadius: BorderRadius.circular(9),
-    child: Image.asset(
-      'assets/images/$name.jpg',
+    child: Image(
+      image: name.startsWith('/api/media/')
+          ? NetworkImage(
+              Uri.parse(Api.base).isAbsolute
+                  ? Uri.parse(Api.base).resolve(name).toString()
+                  : name,
+            )
+          : AssetImage('assets/images/$name.jpg') as ImageProvider,
       height: height,
       width: width,
       fit: fit,
@@ -827,6 +834,14 @@ class _SocialHouseState extends State<SocialHouse> {
         ],
       ),
       const SizedBox(height: 26),
+      if (selected.ingredients.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(
+            'Ingredients: ${selected.ingredients}',
+            style: const TextStyle(fontSize: 13),
+          ),
+        ),
       Text(
         selected.description,
         style: const TextStyle(
@@ -892,7 +907,7 @@ class _SocialHouseState extends State<SocialHouse> {
           Expanded(
             child: FilledButton(
               style: FilledButton.styleFrom(backgroundColor: rust),
-              onPressed: add,
+              onPressed: selected.available ? add : null,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -1049,14 +1064,58 @@ class _SocialHouseState extends State<SocialHouse> {
             ),
           ),
           const SizedBox(height: 18),
-          const Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Text(
-                'DISCOVER YOUR NEXT FAVORITE',
-                style: TextStyle(fontSize: 8, letterSpacing: 1.2),
+              SizedBox(
+                width: 100,
+                child: DropdownButtonFormField<int>(
+                  key: ValueKey('qty-${dish.id}'),
+                  isExpanded: true,
+                  initialValue: cardQuantities[dish.id] ?? 1,
+                  decoration: const InputDecoration(
+                    labelText: 'Qty',
+                    isDense: true,
+                  ),
+                  items: List.generate(
+                    20,
+                    (i) =>
+                        DropdownMenuItem(value: i + 1, child: Text('${i + 1}')),
+                  ),
+                  onChanged: dish.available
+                      ? (v) => setState(() => cardQuantities[dish.id] = v ?? 1)
+                      : null,
+                ),
               ),
-              Spacer(),
-              Icon(Icons.arrow_outward, size: 17),
+              FilledButton.icon(
+                key: ValueKey('bag-${dish.id}'),
+                icon: const Icon(Icons.shopping_bag_outlined, size: 18),
+                label: Text(dish.available ? 'Add to bag' : 'Sold out'),
+                onPressed: dish.available
+                    ? () {
+                        final count = cardQuantities[dish.id] ?? 1;
+                        if ((cart[dish.id] ?? 0) + count > 20) {
+                          notify('Maximum 20 of each dish per order.');
+                          return;
+                        }
+                        setState(
+                          () => cart.update(
+                            dish.id,
+                            (n) => n + count,
+                            ifAbsent: () => count,
+                          ),
+                        );
+                        saveLocal();
+                        notify('$count × ${dish.name} added to your bag');
+                      }
+                    : null,
+              ),
+              TextButton(
+                onPressed: () => open(dish),
+                child: const Text('Details ↗'),
+              ),
             ],
           ),
         ],

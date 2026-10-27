@@ -20,7 +20,7 @@ try{
  const menu=(await call('/menu')).items;
  const chicken=menu.find(i=>i.id==='chicken'),coffee=menu.find(i=>i.id==='coffee');
  const body={table_id:'T03',request_key:requestKey,access_token:customerToken,notes:'AUTOMATED ACCEPTANCE CHECK — NO FOOD PREPARATION',items:[{id:chicken.id,quantity:2,unit_price:chicken.price,notes:'Test item note'},{id:coffee.id,quantity:1,unit_price:coffee.price}]};
- const quote=await call('/orders/quote',{method:'POST',body});assert.equal(quote.total,chicken.price*2+coffee.price+quote.tax);
+ const quote=await call('/orders/quote',{method:'POST',body});assert.equal(quote.total,chicken.price*2+coffee.price+quote.tax);body.expected_total=quote.total;
  const [first,duplicate]=await Promise.all([call('/orders',{method:'POST',body}),call('/orders',{method:'POST',body})]);orderId=first.order.id;assert.equal(duplicate.order.id,orderId);assert.equal(first.order.table_name,table.name);assert.equal(first.order.payment_status,'unpaid');
  const received=await observe(feed,orderId,'new');assert.equal(received.items.length,2);assert.equal(received.items.find(i=>i.menu_id==='chicken').quantity,2);
  console.log('PASS: Table 03 guest order appears in authenticated live staff feed with correct dishes and quantities.');

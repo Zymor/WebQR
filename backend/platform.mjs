@@ -24,7 +24,7 @@ export function createPlatform(db,options={}){
   if(method!=='GET')await rate(`${context.ip??'local'}:${path.startsWith('/staff/auth')?path:path.split('/').slice(0,2).join('/')}`,path==='/staff/auth/login'?10:40);
   if(path==='/health')return {status:'ok',database:'connected'};
   if(path==='/settings'&&method==='GET'){const s=await config();return {address:'',phone:'',email:'',hours:{},venue_name:'After Work',website_url:s.customer_url,staff_url:s.staff_url,ordering_enabled:s.ordering_enabled,tax_basis_points:s.tax_basis_points,currency:'USD',payment_method:'pay_at_counter',timezone:'Asia/Phnom_Penh',demo:false};}
-  if(path==='/menu'&&method==='GET')return {items:(await rows('SELECT m.*,c.name AS category,c.experience FROM aw_menu m JOIN aw_categories c ON c.id=m.category_id WHERE available=true ORDER BY m.name')).map(m=>({...m,vegetarian:m.vegetarian?1:0}))};
+  if(path==='/menu'&&method==='GET')return {items:(await rows('SELECT m.*,c.name AS category,c.experience FROM aw_menu m JOIN aw_categories c ON c.id=m.category_id WHERE archived=false ORDER BY m.name')).map(m=>({...m,vegetarian:m.vegetarian?1:0}))};
   if(path==='/tables'&&method==='GET'){const s=await config();return {tables:(await rows('SELECT * FROM aw_tables WHERE active=true ORDER BY id')).map(t=>({...t,active:1})),website_url:s.customer_url};}
   if(/^\/tables\/[^/]+$/.test(path)&&method==='GET'){const t=(await rows('SELECT * FROM aw_tables WHERE id=$1 AND active=true',[path.split('/')[2]]))[0];if(!t)throw new Problem('This table is not available. Please ask a staff member.',404);return t;}
   if(path==='/staff/setup'&&method==='POST'){
@@ -46,13 +46,14 @@ export function createPlatform(db,options={}){
   if(path==='/staff/auth/logout'&&method==='POST'){requireUser(user);await db.query('DELETE FROM aw_sessions WHERE token_hash=$1',[hash(context.token)]);return {message:'Signed out.'};}
   if(path==='/orders/quote'&&method==='POST')return quote(data);
   if(path==='/orders'&&method==='POST'){
-   const requestKey=text(data,'request_key',16,160),fingerprint=hash(JSON.stringify({table:data.table_id,items:data.items,notes:data.notes??'',name:data.name??'Guest'}));
+   const requestKey=text(data,'request_key',16,160),fingerprint=hash(JSON.stringify({table:data.table_id,items:data.items,notes:data.notes??'',name:data.name??'Guest',expected_total:data.expected_total}));
    const token=text(data,'access_token',32,150); // Created by the customer before submission; the server stores only its hash.
    return db.transaction(async(c)=>{
     await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[requestKey]);
     const previous=(await rows('SELECT * FROM aw_idempotency WHERE key=$1',[requestKey],c))[0];
     if(previous){if(previous.fingerprint!==fingerprint)throw new Problem('This order key was already used with different details.',409);const p=(await rows('SELECT access_hash FROM aw_orders WHERE id=$1',[previous.order_id],c))[0];if(p.access_hash!==hash(token))throw new Problem('The order access token does not match.',403);return {order:await detail(previous.order_id,c),access_token:token,replayed:true};}
     const q=await quote(data,c,true);
+    if(integer(data.expected_total,0,1000000000,'Reviewed total')!==q.total)throw new Problem('The total changed. Review the updated summary and confirm again.',409);
     const oid=id('AW-'),name=text(data,'name',0,100)||'Guest',notes=text(data,'notes',0,1000);
     await c.query('INSERT INTO aw_orders(id,access_hash,table_id,table_name,name,notes,subtotal,tax,total) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[oid,hash(token),q.table.id,q.table.name,name,notes,q.subtotal,q.tax,q.total]);
     for(const line of q.items)await c.query('INSERT INTO aw_order_items(id,order_id,menu_id,name,unit_price,quantity,notes) VALUES($1,$2,$3,$4,$5,$6,$7)',[uuid(),oid,line.id,line.name,line.unit_price,line.quantity,line.notes]);
@@ -79,10 +80,31 @@ export function createPlatform(db,options={}){
    if(path==='/staff/tables'&&method==='GET')return {tables:await rows('SELECT * FROM aw_tables ORDER BY id'),settings:await config()};
    if(path==='/staff/menu'&&method==='GET')return {items:await rows('SELECT m.*,c.name AS category,c.experience FROM aw_menu m JOIN aw_categories c ON c.id=m.category_id ORDER BY m.name'),categories:await rows('SELECT * FROM aw_categories ORDER BY name')};
    requireUser(user,['owner','manager']);
-   if(path==='/staff/menu'&&method==='PATCH'){
-    const mid=text(data,'id',1,100),price=integer(data.price,0,1000000,'Price'),name=text(data,'name',2,150),description=text(data,'description',1,2000),allergens=text(data,'allergens',0,300);
-    if(typeof data.available!=='boolean')throw new Problem('Availability must be true or false.');
-    await db.transaction(async(c)=>{const r=await c.query('UPDATE aw_menu SET name=$1,price=$2,description=$3,allergens=$4,available=$5,updated_at=now() WHERE id=$6 RETURNING id',[name,price,description,allergens,data.available,mid]);if(!r.rows.length)throw new Problem('Menu item not found.',404);await audit(c,user,'menu.updated',mid);await revision(c);});return {message:'Menu updated.'};
+   if(path==='/staff/media'&&method==='POST'){
+    const mime=text(data,'mime',1,40),encoded=text(data,'base64',1,2800000);
+    if(!['image/jpeg','image/png','image/webp'].includes(mime)||!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))throw new Problem('Choose a JPEG, PNG or WebP photo.');
+    const bytes=Buffer.from(encoded,'base64');
+    if(bytes.length>2097152)throw new Problem('Photo must be 2 MB or smaller.',413);
+    const valid=mime==='image/png'?bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):mime==='image/jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP';
+    if(!valid)throw new Problem('The photo contents do not match its file type.');
+    const mid=uuid();await db.transaction(async(c)=>{await c.query('INSERT INTO aw_media(id,mime,data) VALUES($1,$2,$3)',[mid,mime,bytes]);await audit(c,user,'photo.uploaded',mid);});
+    return {image:'/api/media/'+mid};
+   }
+   if(/^\/staff\/menu\/[^/]+\/archive$/.test(path)&&method==='PATCH'){
+    if(typeof data.archived!=='boolean')throw new Problem('Set archive to true or false.');
+    const mid=path.split('/')[3];await db.transaction(async(c)=>{const r=await c.query('UPDATE aw_menu SET archived=$1,updated_at=now() WHERE id=$2 RETURNING id',[data.archived,mid]);if(!r.rows.length)throw new Problem('Dish not found.',404);await audit(c,user,data.archived?'menu.archived':'menu.restored',mid);await revision(c);});return {message:data.archived?'Dish removed. Previous orders are preserved.':'Dish restored.'};
+   }
+   if(path==='/staff/menu'&&['POST','PATCH'].includes(method)){
+    const mid=method==='POST'?id('dish-'):text(data,'id',1,100),price=integer(data.price,0,1000000,'Price'),name=text(data,'name',2,150),description=text(data,'description',1,2000),allergens=text(data,'allergens',0,300),ingredients=text(data,'ingredients',0,2000),category=text(data,'category_id',1,100),image=text(data,'image',1,300);
+    if(typeof data.available!=='boolean'||typeof data.vegetarian!=='boolean')throw new Problem('Availability and vegetarian must be true or false.');
+    await db.transaction(async(c)=>{
+     if(!(await rows('SELECT id FROM aw_categories WHERE id=$1',[category],c)).length)throw new Problem('Choose a valid category.');
+     if(image.startsWith('/api/media/')){if(!(await rows('SELECT id FROM aw_media WHERE id=$1',[image.slice(11)],c)).length)throw new Problem('Upload a valid dish photo.');}
+     else if(!['dessert','sandwich','chicken','sushi','coffee','restaurant'].includes(image))throw new Problem('Upload a dish photo.');
+     if(method==='POST')await c.query('INSERT INTO aw_menu(id,category_id,name,price,description,image,allergens,ingredients,vegetarian,available) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[mid,category,name,price,description,image,allergens,ingredients,data.vegetarian,data.available]);
+     else {const r=await c.query('UPDATE aw_menu SET category_id=$1,name=$2,price=$3,description=$4,image=$5,allergens=$6,ingredients=$7,vegetarian=$8,available=$9,updated_at=now() WHERE id=$10 RETURNING id',[category,name,price,description,image,allergens,ingredients,data.vegetarian,data.available,mid]);if(!r.rows.length)throw new Problem('Menu item not found.',404);}
+     await audit(c,user,method==='POST'?'menu.created':'menu.updated',mid);await revision(c);
+    });return {message:'Dish saved.',id:mid};
    }
    if(path==='/staff/tables'&&['POST','PATCH'].includes(method)){
     const tid=text(data,'id',1,40),name=text(data,'name',1,80),seats=integer(data.seats,1,30,'Seats'),area=text(data,'area',1,60);
@@ -112,7 +134,7 @@ export function createPlatform(db,options={}){
   const table=(await rows('SELECT id,name FROM aw_tables WHERE id=$1 AND active=true'+(lock?' FOR SHARE':''),[text(data,'table_id',1,40)],c))[0];if(!table)throw new Problem('Please scan an active table QR code.',409);
   if(!Array.isArray(data.items)||data.items.length<1||data.items.length>30)throw new Problem('Select between 1 and 30 dishes.');
   const lines=[];let subtotal=0;
-  for(const item of data.items){const qty=integer(item.quantity,1,20),notes=text(item,'notes',0,300),mid=text(item,'id',1,100);const product=(await rows('SELECT id,name,price FROM aw_menu WHERE id=$1 AND available=true'+(lock?' FOR SHARE':''),[mid],c))[0];if(!product)throw new Problem('A dish is no longer available. Refresh your menu.',409);if(lock&&item.unit_price!==product.price)throw new Problem('A price changed. Review the updated total before ordering.',409);lines.push({id:mid,name:product.name,quantity:qty,unit_price:product.price,notes});subtotal+=qty*product.price;}
+  for(const item of data.items){const qty=integer(item.quantity,1,20),notes=text(item,'notes',0,300),mid=text(item,'id',1,100);const product=(await rows('SELECT id,name,price FROM aw_menu WHERE id=$1 AND available=true AND archived=false'+(lock?' FOR SHARE':''),[mid],c))[0];if(!product)throw new Problem('A dish is no longer available. Refresh your menu.',409);if(lock&&item.unit_price!==product.price)throw new Problem('A price changed. Review the updated total before ordering.',409);lines.push({id:mid,name:product.name,quantity:qty,unit_price:product.price,notes});subtotal+=qty*product.price;}
   const tax=Math.round(subtotal*settings.tax_basis_points/10000);return {table,items:lines,subtotal,tax,total:subtotal+tax,payment_status:'unpaid',payment_method:'pay_at_counter',currency:'USD'};
  }
  return {route,session,config,orders,rate};

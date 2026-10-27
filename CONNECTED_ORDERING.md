@@ -81,3 +81,15 @@ These tests do not substitute for the final hosted acceptance run. Cloud accepta
 The public end-to-end check passed against the hosted Neon database: a Table 03 guest order with two dishes arrived in the authenticated SSE staff feed, duplicate concurrent submissions returned one saved order, staff changed its status through accepted/preparing/ready/served/completed, the customer endpoint reflected those changes, reconnecting recovered the saved order, payment stayed unpaid, and unauthorized access was rejected. The temporary test order/account were removed afterward; the operational database remained at zero orders, zero staff accounts, and five tables before handoff.
 
 All five public table endpoints were verified over HTTPS. Source/database/environment paths remained 404. The initial private owner setup token was validated without creating an account by deliberately submitting an invalid form; the owner must choose their own credentials. Physical phone-camera scanning outside the restaurant Wi-Fi has not been directly observed.
+
+## Dish management and shared admin sign-in
+
+Both sites use `/staff/auth/login` with the same staff accounts. The customer Account/Admin page offers Manage menu to owners and managers. Tokens stay in separate tab session storage on each origin; logging out of one session leaves other sessions intact. Guest ordering remains available.
+
+The shared `lib/menu_management.dart` editor is copied into both Flutter projects; keep both copies aligned. It includes desktop Photo/Name/Category/Price/Availability/Actions columns, mobile cards, photo preview/replacement, category selection, USD pricing, description, ingredients, allergens, vegetarian and availability. Remove archives a dish after confirmation; Restore reverses it. Archived dishes are excluded from the public menu; sold-out dishes remain visible with disabled ordering controls. Order snapshots retain their original names and prices.
+
+Photos are JPEG/PNG/WebP files up to 2 MiB. `/staff/media` checks permissions, size, MIME type and file signature, then stores immutable bytes in PostgreSQL `aw_media`. `/api/media/:id` serves them with the correct content type and immutable caching. The database backup includes media. Files do not depend on ephemeral Vercel disk. Monitor database storage as the photo collection grows.
+
+Menu cards have an independent quantity selector and Add to bag button. Controls retain the scanned table and do not trigger details navigation. Public menu data refreshes every 30 seconds and when the local editor saves.
+
+Checkout sends `expected_total` from the reviewed quote. Submission checks it against the locked server calculation along with item prices and availability. Changed prices/tax refresh the quote and require another explicit submission; unavailable dishes must be removed or replaced before ordering. Retry keys and access tokens remain in place. Older clients without a reviewed total must refresh to load the current application.

@@ -24,6 +24,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('\$12.00 USD'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
   testWidgets('Menu search filters products', (tester) async {
     tester.view.physicalSize = const Size(1440, 1200);
@@ -39,6 +40,7 @@ void main() {
     expect(find.text('Signature Cappuccino'), findsOneWidget);
     expect(find.text('Salmon Nigiri'), findsNothing);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
   testWidgets('Mobile layout and navigation fit narrow screens', (
     tester,
@@ -56,5 +58,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('A seat at our table.'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }

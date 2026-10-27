@@ -3,13 +3,20 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import 'local_store.dart' if (dart.library.js_interop) 'local_store_web.dart';
+
 class Api {
   static http.Client client = http.Client();
   static const base = String.fromEnvironment(
     'SOCIAL_API',
     defaultValue: 'http://127.0.0.1:8787/api',
   );
-  static String? token;
+  static String? token = readSession('afterwork.customer.staff');
+  static void remember(String? value) {
+    token = value;
+    writeSession('afterwork.customer.staff', value);
+  }
+
   static Map<String, dynamic>? user;
   static Future<dynamic> request(
     String path, {
@@ -33,6 +40,10 @@ class Api {
         throw Exception('The online service is unavailable. Please retry.');
       }
       if (response.statusCode >= 400) {
+        if (response.statusCode == 401) {
+          remember(null);
+          user = null;
+        }
         throw Exception(decoded['error'] ?? 'Request failed.');
       }
       return decoded;
